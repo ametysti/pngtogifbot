@@ -1,0 +1,23 @@
+# Ignore Git and environment files
+.git
+.gitignore
+.env
+
+# Ignore Docker-related files
+docker-compose.yml
+Dockerfile
+
+# Ignore build and output folders if they exist
+bin/
+build/
+dist/
+
+# Ignore editor or system-specific files
+.vscode/
+*.swp
+.DS_Store
+*.log
+
+# Ignore any other temporary or configuration files
+temp/
+*.tmp
