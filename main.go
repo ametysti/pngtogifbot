@@ -123,6 +123,28 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
+	if m.Content == "!ping" {
+		start := time.Now()
+		msg, _ := s.ChannelMessageSend(m.ChannelID, "Pong!")
+		latency := time.Since(start)
+
+		embed := discordgo.MessageEmbed{
+			Title: "Ping pong",
+			Fields: []*discordgo.MessageEmbedField{
+				{
+					Name:  "Roundtrip ping",
+					Value: fmt.Sprintf("%dms", latency.Milliseconds()),
+				},
+				{
+					Name:  "Latency",
+					Value: fmt.Sprintf("%dms", s.HeartbeatLatency().Milliseconds()),
+				},
+			},
+		}
+
+		s.ChannelMessageEditEmbed(m.ChannelID, msg.ID, &embed)
+	}
+
 	if m.Content == "!stats" {
 		cdn, cdnErr := GetPullZoneStats()
 		storage, storageErr := GetStorageZoneStats()
