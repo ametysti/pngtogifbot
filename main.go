@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"image"
 	"image/gif"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,7 +20,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	"github.com/nfnt/resize"
-	"github.com/shirou/gopsutil/v3/load"
 )
 
 var startTime time.Time
@@ -28,6 +27,128 @@ var startTime time.Time
 func main() {
 	startTime = time.Now()
 	godotenv.Load()
+
+	go StartPrometheusHTTPHandler()
+
+	commands := []*discordgo.ApplicationCommand{
+		{
+			Name: "Transform images to GIF",
+			NameLocalizations: &map[discordgo.Locale]string{
+				"id":     "Ubah gambar menjadi GIF",
+				"da":     "Konverter billeder til GIF'er",
+				"de":     "Bilder in GIFs umwandeln",
+				"en-GB":  "Transform images to GIFs",
+				"en-US":  "Transform images to GIFs",
+				"es-ES":  "Transformar imágenes en GIFs",
+				"es-419": "Transformar imágenes en GIFs",
+				"fr":     "Transformer les images en GIFs",
+				"hr":     "Pretvori slike u GIF-ove",
+				"it":     "Trasforma immagini in GIF",
+				"lt":     "Konvertuoti vaizdus į GIF",
+				"hu":     "Képek átalakítása GIF-fé",
+				"nl":     "Afbeeldingen omzetten naar GIF's",
+				"no":     "Konverter bilder til GIF-er",
+				"pl":     "Przekształć obrazy w GIF-y",
+				"pt-BR":  "Transformar imagens em GIFs",
+				"ro":     "Transformă imaginile în GIF-uri",
+				"fi":     "Muunna kuvat GIF-muotoon",
+				"sv-SE":  "Konvertera bilder till GIF:ar",
+				"vi":     "Chuyển đổi hình ảnh thành GIF",
+				"tr":     "Görselleri GIF'e dönüştür",
+				"cs":     "Převést obrázky na GIFy",
+				"el":     "Μετατροπή εικόνων σε GIF",
+				"bg":     "Превърни в GIF",
+				"ru":     "Преобразовать изображения в GIF",
+				"uk":     "Перетворити зображення на GIF",
+				"hi":     "छवियों को GIF में बदलें",
+				"th":     "แปลงภาพเป็น GIF",
+				"zh-CN":  "将图像转换为GIF",
+				"ja":     "画像をGIFに変換",
+				"zh-TW":  "將圖片轉換為GIF",
+				"ko":     "이미지를 GIF로 변환",
+			},
+
+			Type: 3,
+		},
+	}
+
+	commandHandlers := map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){
+		"Transform images to GIF": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+			var attachments []*discordgo.MessageAttachment
+
+			message := i.Interaction.Message
+
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "Processing images...",
+				},
+			})
+
+			for _, message := range i.ApplicationCommandData().Resolved.Messages {
+				attachments = append(attachments, checkAttachments(message.Attachments)...)
+			}
+
+			if message != nil && len(message.Attachments) > 0 {
+				attachments = append(attachments, checkAttachments(message.Attachments)...)
+			}
+
+			if len(attachments) == 0 {
+				content := "No valid image attachments provided."
+				s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+					Content: &content,
+				})
+				return
+			}
+
+			var links []string
+			var wg sync.WaitGroup
+			var mu sync.Mutex
+
+			for _, a := range attachments {
+				wg.Add(1)
+
+				go func(attachment *discordgo.MessageAttachment) {
+					defer wg.Done()
+
+					buf, err := downloadAndEncodeToGif(attachment)
+					if err != nil {
+						fmt.Println("error processing attachment:", err)
+						return
+					}
+
+					name := uuid.New()
+					fileName := fmt.Sprintf("%s.gif", name)
+
+					folder := "/gifs"
+
+					if !isRunningInDocker() {
+						folder = "/dev/gifs"
+					}
+
+					_, err = Upload(context.Background(), folder, fileName, "", buf)
+					if err != nil {
+						fmt.Println("Error uploading file:", err)
+						return
+					}
+
+					link := "https://pngtogif.b-cdn.net" + folder + "/" + fileName
+
+					mu.Lock()
+					links = append(links, link)
+					mu.Unlock()
+				}(a)
+			}
+
+			wg.Wait()
+
+			joined := strings.Join(links, "\n")
+
+			s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+				Content: &joined,
+			})
+		},
+	}
 
 	dg, err := discordgo.New("Bot " + os.Getenv("BOT_TOKEN"))
 	if err != nil {
@@ -38,18 +159,60 @@ func main() {
 	dg.AddHandler(messageCreate)
 	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentMessageContent
 
+	dg.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		if h, ok := commandHandlers[i.ApplicationCommandData().Name]; ok {
+			h(s, i)
+		}
+	})
+
 	err = dg.Open()
 	if err != nil {
 		fmt.Println("error opening connection,", err)
 		return
 	}
 
+	log.Println("Adding commands...")
+	registeredCommands := make([]*discordgo.ApplicationCommand, len(commands))
+	for i, v := range commands {
+		cmd, err := dg.ApplicationCommandCreate(dg.State.User.ID, "", v)
+		if err != nil {
+			log.Panicf("Cannot create '%v' command: %v", v.Name, err)
+		}
+		registeredCommands[i] = cmd
+	}
+
 	fmt.Println("Bot is now running.  Press CTRL-C to exit.")
+
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			<-ticker.C
+			updateMetrics(dg)
+		}
+	}()
+
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	<-sc
 
 	dg.Close()
+}
+
+func updateMetrics(dg *discordgo.Session) {
+	botType := "png2gif"
+
+	guilds := dg.State.Guilds
+	discordGuildCount.WithLabelValues(botType).Set(float64(len(guilds)))
+
+	var totalMembers int
+	for _, guild := range guilds {
+		totalMembers += len(guild.Members)
+	}
+
+	latency := dg.HeartbeatLatency().Seconds()
+	discordLatency.WithLabelValues(botType).Set(latency)
 }
 
 func checkAttachments(attachments []*discordgo.MessageAttachment) (attachs []*discordgo.MessageAttachment) {
@@ -123,169 +286,5 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
-	if m.Content == "!ping" {
-		start := time.Now()
-		msg, _ := s.ChannelMessageSend(m.ChannelID, "Pong!")
-		latency := time.Since(start)
-
-		uid := uuid.New()
-
-		uploadStart := time.Now()
-		Upload(context.Background(), "/_temp", uid.String(), "", nil)
-		uploadLatency := time.Since(uploadStart)
-		Delete(context.Background(), "/_temp", "")
-
-		embed := discordgo.MessageEmbed{
-			Title: "Pong",
-			Fields: []*discordgo.MessageEmbedField{
-				{
-					Name:   "Roundtrip latency",
-					Value:  fmt.Sprintf("%dms", latency.Milliseconds()),
-					Inline: true,
-				},
-				{
-					Name:   "Discord Latency",
-					Value:  fmt.Sprintf("%dms", s.HeartbeatLatency().Milliseconds()),
-					Inline: true,
-				},
-				{
-					Name:  "Upload time",
-					Value: fmt.Sprintf("%dms", uploadLatency.Milliseconds()),
-				},
-			},
-		}
-
-		s.ChannelMessageEditEmbed(m.ChannelID, msg.ID, &embed)
-	}
-
-	if m.Content == "!stats" {
-		cdn, cdnErr := GetPullZoneStats()
-		storage, storageErr := GetStorageZoneStats()
-		uptime := time.Since(startTime)
-
-		days := int(uptime.Hours()) / 24
-		hours := int(uptime.Hours()) % 24
-		minutes := int(uptime.Minutes()) % 60
-		seconds := int(uptime.Seconds()) % 60
-
-		uptimeResponse := fmt.Sprintf("%dd %dh %dm %ds", days, hours, minutes, seconds)
-
-		var mstats runtime.MemStats
-		runtime.ReadMemStats(&mstats)
-
-		ramMB := mstats.Alloc / 1024 / 1024
-
-		avg, _ := load.Avg()
-		cpuResponse := fmt.Sprintf("%.2f %.2f %.2f", avg.Load1, avg.Load5, avg.Load15)
-
-		cdnResponse := fmt.Sprintf("**Bandwidth:** %s\n**Requests:** %d requests", bytesToReadable(cdn.TotalBandwidthUsed), cdn.TotalRequestsServed)
-		storageResponse := fmt.Sprintf("**Storage used:** %s\n**Files stored:** %d files", bytesToReadable(int64(storage.StorageUsed)), storage.FileCount)
-
-		if cdnErr != nil {
-			cdnResponse = "CDN Stats API Down"
-		}
-
-		if storageErr != nil {
-			storageResponse = "Storage Stats API Down"
-		}
-
-		embed := discordgo.MessageEmbed{
-			Title: "png to gif bot",
-			Fields: []*discordgo.MessageEmbedField{
-				{
-					Name:   "CDN Stats",
-					Value:  cdnResponse,
-					Inline: true,
-				},
-				{
-					Name:   "Storage Stats",
-					Value:  storageResponse,
-					Inline: true,
-				},
-				{
-					Name:  "Bot stats",
-					Value: fmt.Sprintf("**Uptime:** %s\n**CPU Load:** %s\n**RAM usage:** %d MB", uptimeResponse, cpuResponse, ramMB),
-				},
-			},
-		}
-
-		s.ChannelMessageSendEmbed(m.ChannelID, &embed)
-	}
-
-	if m.Content == "!info" {
-		embed := discordgo.MessageEmbed{
-			Title: "png to gif bot",
-			Fields: []*discordgo.MessageEmbedField{
-				{
-					Name:  "what is this bot",
-					Value: "This bot allows you to transform an image into a GIF directly from Discord. Images are uploaded to datacenters in both Europe and the USA to ensure high availability.",
-				},
-				{
-					Name:  "Why this bot?",
-					Value: "If you upload a GIF directly to Discord and save it to your favorites, it will eventually expire because Discord uses token-based authentication for images.",
-				},
-			},
-		}
-
-		s.ChannelMessageSendEmbed(m.ChannelID, &embed)
-
-	}
-
-	if m.Content == "!gifify" {
-
-		var attachments []*discordgo.MessageAttachment
-
-		if m.ReferencedMessage != nil && len(m.ReferencedMessage.Attachments) > 0 {
-			attachments = append(attachments, checkAttachments(m.ReferencedMessage.Attachments)...)
-		}
-
-		if len(m.Attachments) > 0 {
-			attachments = append(attachments, checkAttachments(m.Attachments)...)
-		}
-
-		if len(attachments) == 0 {
-			s.ChannelMessageSend(m.ChannelID, "no valid image attachments provided. note that this system only allows uploading static images.")
-			return
-		}
-
-		s.ChannelTyping(m.ChannelID)
-
-		var links []string
-
-		var wg sync.WaitGroup
-		var mu sync.Mutex
-
-		for _, a := range attachments {
-			wg.Add(1)
-
-			go func(attachment *discordgo.MessageAttachment) {
-				defer wg.Done()
-
-				buf, err := downloadAndEncodeToGif(attachment)
-				if err != nil {
-					fmt.Println("error processing attachment:", err)
-					return
-				}
-
-				name := uuid.New()
-				fileName := fmt.Sprintf("%s.gif", name)
-
-				_, err = Upload(context.Background(), "/gifs", fileName, "", buf)
-				if err != nil {
-					fmt.Println("Error uploading file:", err)
-					return
-				}
-
-				link := "https://pngtogif.b-cdn.net/gifs/" + fileName
-
-				mu.Lock()
-				links = append(links, link)
-				mu.Unlock()
-			}(a)
-		}
-
-		wg.Wait()
-
-		s.ChannelMessageSend(m.ChannelID, strings.Join(links, "\n"))
-	}
+	HandlePrefixCommands(s, m)
 }

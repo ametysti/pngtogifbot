@@ -97,21 +97,18 @@ func GetStorageZoneStats() (LatestChartData, error) {
 		return LatestChartData{}, err
 	}
 
-	// Get latest StorageUsed
 	var storageTimes []string
 	for t := range stats.StorageUsedChart {
 		storageTimes = append(storageTimes, t)
 	}
 	sort.Strings(storageTimes)
 
-	// Get latest FileCount
 	var fileTimes []string
 	for t := range stats.FileCountChart {
 		fileTimes = append(fileTimes, t)
 	}
 	sort.Strings(fileTimes)
 
-	// Handle if no data
 	var latestStorageUsed, latestFileCount int
 	if len(storageTimes) > 0 {
 		latestStorageUsed = stats.StorageUsedChart[storageTimes[len(storageTimes)-1]]

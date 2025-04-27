@@ -19,4 +19,6 @@ COPY --from=builder /goapp /app/goapp
 
 RUN mkdir -p /app/files
 
+EXPOSE 2112
+
 CMD ["./goapp"]

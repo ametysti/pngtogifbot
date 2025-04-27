@@ -4,11 +4,11 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math/big"
+	"os"
 )
 
 const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
 
-// GenerateRandomString generates a secure random string of the given length.
 func GenerateRandomString(length int) (string, error) {
 	var result []byte
 	charsetLen := big.NewInt(int64(len(charset)))
@@ -22,4 +22,12 @@ func GenerateRandomString(length int) (string, error) {
 	}
 
 	return string(result), nil
+}
+
+func isRunningInDocker() bool {
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+
+	return false
 }
