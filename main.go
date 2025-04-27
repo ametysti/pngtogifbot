@@ -128,16 +128,29 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		msg, _ := s.ChannelMessageSend(m.ChannelID, "Pong!")
 		latency := time.Since(start)
 
+		uid := uuid.New()
+
+		uploadStart := time.Now()
+		Upload(context.Background(), "/_temp", uid.String(), "", nil)
+		uploadLatency := time.Since(uploadStart)
+		Delete(context.Background(), "/_temp", uid.String())
+
 		embed := discordgo.MessageEmbed{
-			Title: "Ping pong",
+			Title: "Pong",
 			Fields: []*discordgo.MessageEmbedField{
 				{
-					Name:  "Roundtrip ping",
-					Value: fmt.Sprintf("%dms", latency.Milliseconds()),
+					Name:   "Roundtrip latency",
+					Value:  fmt.Sprintf("%dms", latency.Milliseconds()),
+					Inline: true,
 				},
 				{
-					Name:  "Latency",
-					Value: fmt.Sprintf("%dms", s.HeartbeatLatency().Milliseconds()),
+					Name:   "Discord Latency",
+					Value:  fmt.Sprintf("%dms", s.HeartbeatLatency().Milliseconds()),
+					Inline: true,
+				},
+				{
+					Name:  "Upload time",
+					Value: fmt.Sprintf("%dms", uploadLatency.Milliseconds()),
 				},
 			},
 		}
