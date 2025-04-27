@@ -133,7 +133,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		uploadStart := time.Now()
 		Upload(context.Background(), "/_temp", uid.String(), "", nil)
 		uploadLatency := time.Since(uploadStart)
-		Delete(context.Background(), "/_temp", uid.String())
+		Delete(context.Background(), "/_temp", "")
 
 		embed := discordgo.MessageEmbed{
 			Title: "Pong",
