@@ -33,6 +33,7 @@ func StartPrometheusHTTPHandler() {
 	hostname := "png2gif web server dev"
 
 	if isRunningInDocker() {
+		addr = ":2112"
 		hostname = "png2gif web server"
 	}
 
