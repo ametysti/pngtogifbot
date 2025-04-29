@@ -83,7 +83,7 @@ func HandlePrefixCommands(s *discordgo.Session, m *discordgo.MessageCreate) {
 			Title: "png to gif bot",
 			Fields: []*discordgo.MessageEmbedField{
 				{
-					Name:   "CDN Stats",
+					Name:   "CDN Stats past month",
 					Value:  cdnResponse,
 					Inline: true,
 				},
@@ -96,6 +96,9 @@ func HandlePrefixCommands(s *discordgo.Session, m *discordgo.MessageCreate) {
 					Name:  "Bot stats",
 					Value: fmt.Sprintf("**Uptime:** %s\n**CPU Load:** %s\n**RAM usage:** %d MB", uptimeResponse, cpuResponse, ramMB),
 				},
+			},
+			Footer: &discordgo.MessageEmbedFooter{
+				Text: fmt.Sprintf("%dms", s.HeartbeatLatency().Milliseconds()),
 			},
 		}
 

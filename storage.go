@@ -52,8 +52,6 @@ func Upload(ctx context.Context, filepath string, filename string, checksum stri
 		return nil, err
 	}
 
-	println(AccessKey)
-
 	req.Header.Set("AccessKey", AccessKey)
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("Accept", "application/json")

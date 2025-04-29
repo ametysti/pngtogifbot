@@ -78,13 +78,6 @@ func main() {
 
 			message := i.Interaction.Message
 
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: "Processing images...",
-				},
-			})
-
 			for _, message := range i.ApplicationCommandData().Resolved.Messages {
 				attachments = append(attachments, checkAttachments(message.Attachments)...)
 			}
@@ -94,12 +87,22 @@ func main() {
 			}
 
 			if len(attachments) == 0 {
-				content := "No valid image attachments provided."
-				s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-					Content: &content,
+				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+					Type: discordgo.InteractionResponseChannelMessageWithSource,
+					Data: &discordgo.InteractionResponseData{
+						Flags:   discordgo.MessageFlagsEphemeral,
+						Content: "No valid image attachments provided.",
+					},
 				})
 				return
 			}
+
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "Processing images...",
+				},
+			})
 
 			var links []string
 			var wg sync.WaitGroup

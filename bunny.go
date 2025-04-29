@@ -68,16 +68,14 @@ func GetPullZoneStats() (PullZoneStats, error) {
 
 func GetStorageZoneStats() (LatestChartData, error) {
 	url := fmt.Sprintf(
-		"https://api.bunny.net/storagezone/999741/statistics?dateFrom=%d&dateTo=%d",
-		time.Now().Add(-time.Hour).UnixMilli(),
-		time.Now().UnixMilli(),
+		"https://api.bunny.net/storagezone/999741/statistics?dateFrom=%s&dateTo=%s",
+		time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
+		time.Now().UTC().Format(time.RFC3339),
 	)
-
-	println(url)
 
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Add("accept", "application/json")
-	req.Header.Add("AccessKey", os.Getenv("BUNNYNET_CDN_STORAGE_KEY"))
+	req.Header.Add("AccessKey", os.Getenv("BUNNYNET_API_KEY"))
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	res, err := client.Do(req)
