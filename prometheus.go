@@ -38,7 +38,8 @@ func StartPrometheusHTTPHandler() {
 	}
 
 	s := &tsnet.Server{
-		Hostname: hostname,
+		Hostname:  hostname,
+		Ephemeral: true,
 	}
 	defer s.Close()
 

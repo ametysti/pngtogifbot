@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	"github.com/nfnt/resize"
+	"github.com/shirou/gopsutil/v3/load"
 )
 
 var startTime time.Time
@@ -67,8 +69,11 @@ func main() {
 				"zh-TW":  "將圖片轉換為GIF",
 				"ko":     "이미지를 GIF로 변환",
 			},
-
 			Type: 3,
+		},
+		{
+			Name:        "statistics",
+			Description: "Statistics of png2gif bot",
 		},
 	}
 
@@ -151,6 +156,68 @@ func main() {
 				Content: &joined,
 			})
 		},
+		"statistics": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+			cdn, cdnErr := GetPullZoneStats()
+			storage, storageErr := GetStorageZoneStats()
+			uptime := time.Since(startTime)
+
+			days := int(uptime.Hours()) / 24
+			hours := int(uptime.Hours()) % 24
+			minutes := int(uptime.Minutes()) % 60
+			seconds := int(uptime.Seconds()) % 60
+
+			uptimeResponse := fmt.Sprintf("%dd %dh %dm %ds", days, hours, minutes, seconds)
+
+			var mstats runtime.MemStats
+			runtime.ReadMemStats(&mstats)
+
+			ramMB := mstats.Alloc / 1024 / 1024
+
+			avg, _ := load.Avg()
+			cpuResponse := fmt.Sprintf("%.2f %.2f %.2f", avg.Load1, avg.Load5, avg.Load15)
+
+			cdnResponse := fmt.Sprintf("**Bandwidth:** %s\n**Requests:** %d requests", bytesToReadable(cdn.TotalBandwidthUsed), cdn.TotalRequestsServed)
+			storageResponse := fmt.Sprintf("**Storage used:** %s\n**Files stored:** %d files", bytesToReadable(int64(storage.StorageUsed)), storage.FileCount)
+
+			if cdnErr != nil {
+				cdnResponse = "CDN Stats API Down"
+			}
+
+			if storageErr != nil {
+				storageResponse = "Storage Stats API Down"
+			}
+
+			embed := discordgo.MessageEmbed{
+				Title: "png2gif bot",
+				Fields: []*discordgo.MessageEmbedField{
+					{
+						Name:   "CDN Stats past month",
+						Value:  cdnResponse,
+						Inline: true,
+					},
+					{
+						Name:   "Storage Stats",
+						Value:  storageResponse,
+						Inline: true,
+					},
+					{
+						Name:  "Bot stats",
+						Value: fmt.Sprintf("**Pod ID:** %s\n**Pod region:** %s\n**Pod uptime:** %s\n**CPU Load:** %s\n**RAM usage:** %d MB", os.Getenv("BUNNYNET_MC_PODID"), os.Getenv("BUNNYNET_MC_REGION"), uptimeResponse, cpuResponse, ramMB),
+					},
+				},
+				Footer: &discordgo.MessageEmbedFooter{
+					Text: fmt.Sprintf("Pod is the current pod that is handling all Discord related stuff. ping: %dms", s.HeartbeatLatency().Milliseconds()),
+				},
+			}
+
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Flags:  discordgo.MessageFlagsEphemeral,
+					Embeds: []*discordgo.MessageEmbed{&embed},
+				},
+			})
+		},
 	}
 
 	dg, err := discordgo.New("Bot " + os.Getenv("BOT_TOKEN"))
@@ -159,7 +226,6 @@ func main() {
 		return
 	}
 
-	dg.AddHandler(messageCreate)
 	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentMessageContent
 
 	dg.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -282,12 +348,4 @@ func downloadAndEncodeToGif(attachment *discordgo.MessageAttachment) (*bytes.Buf
 	}
 
 	return buf, nil
-}
-
-func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
-	if m.Author.ID == s.State.User.ID {
-		return
-	}
-
-	HandlePrefixCommands(s, m)
 }
