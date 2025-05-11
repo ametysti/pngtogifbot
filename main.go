@@ -7,6 +7,8 @@ import (
 	"image"
 	"image/gif"
 	"log"
+	"log/slog"
+	"mehf/pngtogifbot/translations"
 	"net/http"
 	"os"
 	"os/signal"
@@ -34,45 +36,17 @@ func main() {
 
 	commands := []*discordgo.ApplicationCommand{
 		{
-			Name: "Transform images to GIF",
-			NameLocalizations: &map[discordgo.Locale]string{
-				"id":     "Ubah gambar menjadi GIF",
-				"da":     "Konverter billeder til GIF'er",
-				"de":     "Bilder in GIFs umwandeln",
-				"en-GB":  "Transform images to GIFs",
-				"en-US":  "Transform images to GIFs",
-				"es-ES":  "Transformar imágenes en GIFs",
-				"es-419": "Transformar imágenes en GIFs",
-				"fr":     "Transformer les images en GIFs",
-				"hr":     "Pretvori slike u GIF-ove",
-				"it":     "Trasforma immagini in GIF",
-				"lt":     "Konvertuoti vaizdus į GIF",
-				"hu":     "Képek átalakítása GIF-fé",
-				"nl":     "Afbeeldingen omzetten naar GIF's",
-				"no":     "Konverter bilder til GIF-er",
-				"pl":     "Przekształć obrazy w GIF-y",
-				"pt-BR":  "Transformar imagens em GIFs",
-				"ro":     "Transformă imaginile în GIF-uri",
-				"fi":     "Muunna kuvat GIF-muotoon",
-				"sv-SE":  "Konvertera bilder till GIF:ar",
-				"vi":     "Chuyển đổi hình ảnh thành GIF",
-				"tr":     "Görselleri GIF'e dönüştür",
-				"cs":     "Převést obrázky na GIFy",
-				"el":     "Μετατροπή εικόνων σε GIF",
-				"bg":     "Превърни в GIF",
-				"ru":     "Преобразовать изображения в GIF",
-				"uk":     "Перетворити зображення на GIF",
-				"hi":     "छवियों को GIF में बदलें",
-				"th":     "แปลงภาพเป็น GIF",
-				"zh-CN":  "将图像转换为GIF",
-				"ja":     "画像をGIFに変換",
-				"zh-TW":  "將圖片轉換為GIF",
-				"ko":     "이미지를 GIF로 변환",
-			},
-			Type: 3,
+			Name:              "Transform images to GIF",
+			NameLocalizations: translations.TransformImageToGif,
+			Type:              3,
 		},
 		{
-			Name:        "statistics",
+			Name:              "Archive existing GIF",
+			NameLocalizations: translations.ArchiveGif,
+			Type:              3,
+		},
+		{
+			Name:        "stats",
 			Description: "Statistics of png2gif bot",
 		},
 	}
@@ -96,7 +70,7 @@ func main() {
 					Type: discordgo.InteractionResponseChannelMessageWithSource,
 					Data: &discordgo.InteractionResponseData{
 						Flags:   discordgo.MessageFlagsEphemeral,
-						Content: "No valid image attachments provided.",
+						Content: "No valid image attachments provided. Note that it has to be an uploaded image, not a link",
 					},
 				})
 				return
@@ -156,7 +130,85 @@ func main() {
 				Content: &joined,
 			})
 		},
-		"statistics": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		"Archive existing GIF": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+			var attachments []*discordgo.MessageAttachment
+
+			message := i.Interaction.Message
+
+			for _, message := range i.ApplicationCommandData().Resolved.Messages {
+				attachments = append(attachments, checkGifAttachments(message.Attachments)...)
+			}
+
+			if message != nil && len(message.Attachments) > 0 {
+				attachments = append(attachments, checkGifAttachments(message.Attachments)...)
+			}
+
+			if len(attachments) == 0 {
+				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+					Type: discordgo.InteractionResponseChannelMessageWithSource,
+					Data: &discordgo.InteractionResponseData{
+						Flags:   discordgo.MessageFlagsEphemeral,
+						Content: "No valid GIFs provided. Note that it has to be an uploaded gif, not a link (eg. from the favorites bar)",
+					},
+				})
+				return
+			}
+
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "Processing images...",
+				},
+			})
+
+			var links []string
+			var wg sync.WaitGroup
+			var mu sync.Mutex
+
+			for _, a := range attachments {
+				wg.Add(1)
+
+				go func(attachment *discordgo.MessageAttachment) {
+					defer wg.Done()
+
+					buf, err := downloadGif(attachment)
+					if err != nil {
+						fmt.Println("error processing attachment:", err)
+						return
+					}
+
+					name := uuid.New()
+					fileName := fmt.Sprintf("%s.gif", name)
+
+					folder := "/gifs"
+
+					if !isRunningInDocker() {
+						folder = "/dev/gifs"
+					}
+
+					_, err = Upload(context.Background(), folder, fileName, "", buf)
+					if err != nil {
+						fmt.Println("Error uploading file:", err)
+						return
+					}
+
+					link := "https://pngtogif.b-cdn.net" + folder + "/" + fileName
+
+					mu.Lock()
+					links = append(links, link)
+					mu.Unlock()
+				}(a)
+			}
+
+			wg.Wait()
+
+			joined := strings.Join(links, "\n")
+
+			s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+				Content: &joined,
+			})
+		},
+		"stats": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 			cdn, cdnErr := GetPullZoneStats()
 			storage, storageErr := GetStorageZoneStats()
 			uptime := time.Since(startTime)
@@ -250,6 +302,27 @@ func main() {
 		registeredCommands[i] = cmd
 	}
 
+	slog.Info("Checking for obsolete commands to remove...")
+
+	commandsOnDiscord, err := dg.ApplicationCommands(dg.State.User.ID, "")
+	if err != nil {
+		slog.Error("failed to get Application commands")
+	}
+	localCommandNames := make(map[string]bool)
+	for _, cmd := range commands {
+		localCommandNames[cmd.Name] = true
+	}
+
+	for _, v := range commandsOnDiscord {
+		if _, exists := localCommandNames[v.Name]; !exists {
+			log.Printf("Deleting obsolete command: %s", v.Name)
+			err := dg.ApplicationCommandDelete(dg.State.User.ID, "", v.ID)
+			if err != nil {
+				log.Printf("Failed to delete '%v': %v", v.Name, err)
+			}
+		}
+	}
+
 	fmt.Println("Bot is now running.  Press CTRL-C to exit.")
 
 	go func() {
@@ -294,6 +367,16 @@ func checkAttachments(attachments []*discordgo.MessageAttachment) (attachs []*di
 	return attachs
 }
 
+func checkGifAttachments(attachments []*discordgo.MessageAttachment) (attachs []*discordgo.MessageAttachment) {
+	for _, attc := range attachments {
+		if attc.ContentType == "image/gif" {
+			attachs = append(attachs, attc)
+		}
+	}
+
+	return attachs
+}
+
 func bytesToReadable(bytes int64) string {
 	const unit = 1024
 	if bytes < unit {
@@ -305,6 +388,31 @@ func bytesToReadable(bytes int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+func downloadGif(attachment *discordgo.MessageAttachment) (*bytes.Buffer, error) {
+	resp, err := http.Get(attachment.URL)
+	if err != nil {
+		fmt.Println("Error downloading attachment:", err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	g, err := gif.DecodeAll(resp.Body)
+	if err != nil {
+		fmt.Println("Error decoding GIF:", err)
+		return nil, err
+	}
+
+	buf := new(bytes.Buffer)
+
+	err = gif.EncodeAll(buf, g)
+	if err != nil {
+		fmt.Println("Error encoding GIF:", err)
+		return nil, err
+	}
+
+	return buf, nil
 }
 
 func downloadAndEncodeToGif(attachment *discordgo.MessageAttachment) (*bytes.Buffer, error) {
@@ -326,16 +434,23 @@ func downloadAndEncodeToGif(attachment *discordgo.MessageAttachment) (*bytes.Buf
 	originalWidth := img.Bounds().Dx()
 	originalHeight := img.Bounds().Dy()
 
-	var newWidth, newHeight uint
-	if originalWidth > originalHeight {
-		newWidth = 512
-		newHeight = uint(float64(originalHeight) * (float64(512) / float64(originalWidth)))
-	} else {
-		newHeight = 512
-		newWidth = uint(float64(originalWidth) * (float64(512) / float64(originalHeight)))
-	}
+	var resizedImg image.Image
 
-	resizedImg := resize.Resize(newWidth, newHeight, img, resize.Lanczos3)
+	if originalWidth <= 512 && originalHeight <= 512 {
+		resizedImg = img
+	} else {
+		var scale float64
+		if originalWidth > originalHeight {
+			scale = float64(512) / float64(originalWidth)
+		} else {
+			scale = float64(512) / float64(originalHeight)
+		}
+
+		newWidth := uint(float64(originalWidth) * scale)
+		newHeight := uint(float64(originalHeight) * scale)
+
+		resizedImg = resize.Resize(newWidth, newHeight, img, resize.Lanczos3)
+	}
 
 	images := []image.Image{resizedImg}
 	gifImage := easygif.MostCommonColors(images, 0)
