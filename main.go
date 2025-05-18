@@ -22,7 +22,6 @@ import (
 	"github.com/gary23b/easygif"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
-	"github.com/nfnt/resize"
 	"github.com/shirou/gopsutil/v3/load"
 )
 
@@ -58,11 +57,11 @@ func main() {
 			message := i.Interaction.Message
 
 			for _, message := range i.ApplicationCommandData().Resolved.Messages {
-				attachments = append(attachments, checkAttachments(message.Attachments)...)
+				attachments = append(attachments, checkAttachments(message.Attachments, "image/")...)
 			}
 
 			if message != nil && len(message.Attachments) > 0 {
-				attachments = append(attachments, checkAttachments(message.Attachments)...)
+				attachments = append(attachments, checkAttachments(message.Attachments, "image/")...)
 			}
 
 			if len(attachments) == 0 {
@@ -136,11 +135,11 @@ func main() {
 			message := i.Interaction.Message
 
 			for _, message := range i.ApplicationCommandData().Resolved.Messages {
-				attachments = append(attachments, checkGifAttachments(message.Attachments)...)
+				attachments = append(attachments, checkAttachments(message.Attachments, "image/gif")...)
 			}
 
 			if message != nil && len(message.Attachments) > 0 {
-				attachments = append(attachments, checkGifAttachments(message.Attachments)...)
+				attachments = append(attachments, checkAttachments(message.Attachments, "image/gif")...)
 			}
 
 			if len(attachments) == 0 {
@@ -209,8 +208,15 @@ func main() {
 			})
 		},
 		"stats": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "Fetching statistics data...",
+				},
+			})
+
 			cdn, cdnErr := GetPullZoneStats()
-			storage, storageErr := GetStorageZoneStats()
+			totalFiles, totalSize, storageErr := GetStorageZoneStats()
 			uptime := time.Since(startTime)
 
 			days := int(uptime.Hours()) / 24
@@ -229,7 +235,7 @@ func main() {
 			cpuResponse := fmt.Sprintf("%.2f %.2f %.2f", avg.Load1, avg.Load5, avg.Load15)
 
 			cdnResponse := fmt.Sprintf("**Bandwidth:** %s\n**Requests:** %d requests", bytesToReadable(cdn.TotalBandwidthUsed), cdn.TotalRequestsServed)
-			storageResponse := fmt.Sprintf("**Storage used:** %s\n**Files stored:** %d files", bytesToReadable(int64(storage.StorageUsed)), storage.FileCount)
+			storageResponse := fmt.Sprintf("**Storage used:** %s\n**Files stored:** %d files", bytesToReadable(totalSize), totalFiles)
 
 			if cdnErr != nil {
 				cdnResponse = "CDN Stats API Down"
@@ -254,20 +260,16 @@ func main() {
 					},
 					{
 						Name:  "Bot stats",
-						Value: fmt.Sprintf("**Pod ID:** %s\n**Pod region:** %s\n**Pod uptime:** %s\n**CPU Load:** %s\n**RAM usage:** %d MB", os.Getenv("BUNNYNET_MC_PODID"), os.Getenv("BUNNYNET_MC_REGION"), uptimeResponse, cpuResponse, ramMB),
+						Value: fmt.Sprintf("**Uptime:** %s\n**CPU Load:** %s\n**RAM usage:** %d MB", uptimeResponse, cpuResponse, ramMB),
 					},
 				},
 				Footer: &discordgo.MessageEmbedFooter{
-					Text: fmt.Sprintf("Pod is the current pod that is handling all Discord related stuff. ping: %dms", s.HeartbeatLatency().Milliseconds()),
+					Text: fmt.Sprintf("%s-%s | Ping: %dms", os.Getenv("BUNNYNET_MC_REGION"), os.Getenv("BUNNYNET_MC_PODID"), s.HeartbeatLatency().Milliseconds()),
 				},
 			}
 
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Flags:  discordgo.MessageFlagsEphemeral,
-					Embeds: []*discordgo.MessageEmbed{&embed},
-				},
+			s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+				Embeds: &[]*discordgo.MessageEmbed{&embed},
 			})
 		},
 	}
@@ -357,19 +359,13 @@ func updateMetrics(dg *discordgo.Session) {
 	discordLatency.WithLabelValues(botType).Set(latency)
 }
 
-func checkAttachments(attachments []*discordgo.MessageAttachment) (attachs []*discordgo.MessageAttachment) {
-	for _, attc := range attachments {
-		if strings.HasPrefix(attc.ContentType, "image/") && attc.ContentType != "image/gif" {
-			attachs = append(attachs, attc)
-		}
+func checkAttachments(attachments []*discordgo.MessageAttachment, contentTypePrefix string) (attachs []*discordgo.MessageAttachment) {
+	if contentTypePrefix == "" {
+		contentTypePrefix = "image/"
 	}
 
-	return attachs
-}
-
-func checkGifAttachments(attachments []*discordgo.MessageAttachment) (attachs []*discordgo.MessageAttachment) {
 	for _, attc := range attachments {
-		if attc.ContentType == "image/gif" {
+		if strings.HasPrefix(attc.ContentType, contentTypePrefix) {
 			attachs = append(attachs, attc)
 		}
 	}
@@ -431,28 +427,7 @@ func downloadAndEncodeToGif(attachment *discordgo.MessageAttachment) (*bytes.Buf
 
 	fmt.Printf("Detected image format: %s\n", format)
 
-	originalWidth := img.Bounds().Dx()
-	originalHeight := img.Bounds().Dy()
-
-	var resizedImg image.Image
-
-	if originalWidth <= 512 && originalHeight <= 512 {
-		resizedImg = img
-	} else {
-		var scale float64
-		if originalWidth > originalHeight {
-			scale = float64(512) / float64(originalWidth)
-		} else {
-			scale = float64(512) / float64(originalHeight)
-		}
-
-		newWidth := uint(float64(originalWidth) * scale)
-		newHeight := uint(float64(originalHeight) * scale)
-
-		resizedImg = resize.Resize(newWidth, newHeight, img, resize.Lanczos3)
-	}
-
-	images := []image.Image{resizedImg}
+	images := []image.Image{img}
 	gifImage := easygif.MostCommonColors(images, 0)
 
 	buf := new(bytes.Buffer)

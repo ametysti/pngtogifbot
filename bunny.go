@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"sort"
 	"time"
 )
 
@@ -24,14 +23,10 @@ type PullZoneStats struct {
 	PullRequestsPulledChart   map[string]float64 `json:"PullRequestsPulledChart"`
 }
 
-type StorageStats struct {
-	StorageUsedChart map[string]int `json:"StorageUsedChart"`
-	FileCountChart   map[string]int `json:"FileCountChart"`
-}
-
-type LatestChartData struct {
-	StorageUsed int `json:"latestStorageUsed"`
-	FileCount   int `json:"latestFileCount"`
+type BunnyStorageObject struct {
+	ObjectName  string `json:"ObjectName"`
+	Length      int64  `json:"Length"`
+	IsDirectory bool   `json:"IsDirectory"`
 }
 
 func GetPullZoneStats() (PullZoneStats, error) {
@@ -66,57 +61,42 @@ func GetPullZoneStats() (PullZoneStats, error) {
 	return stats, nil
 }
 
-func GetStorageZoneStats() (LatestChartData, error) {
-	url := fmt.Sprintf(
-		"https://api.bunny.net/storagezone/999741/statistics?dateFrom=%s&dateTo=%s",
-		time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
-		time.Now().UTC().Format(time.RFC3339),
-	)
+func GetStorageZoneStats() (int, int64, error) {
+	url := "https://storage.bunnycdn.com/pngtogif/gifs/"
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return 0, 0, fmt.Errorf("creating request failed: %w", err)
+	}
+	req.Header.Set("AccessKey", os.Getenv("BUNNYNET_CDN_STORAGE_KEY"))
+	req.Header.Set("Accept", "application/json")
 
-	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Add("accept", "application/json")
-	req.Header.Add("AccessKey", os.Getenv("BUNNYNET_API_KEY"))
-
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second}
 	res, err := client.Do(req)
 	if err != nil {
-		return LatestChartData{}, err
+		return 0, 0, fmt.Errorf("request failed: %w", err)
 	}
 	defer res.Body.Close()
 
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		return LatestChartData{}, err
+		return 0, 0, fmt.Errorf("reading response body failed: %w", err)
 	}
 
-	var stats StorageStats
-	err = json.Unmarshal(body, &stats)
-	if err != nil {
-		return LatestChartData{}, err
+	var objects []BunnyStorageObject
+	if err := json.Unmarshal(body, &objects); err != nil {
+		return 0, 0, fmt.Errorf("unmarshaling response failed: %w", err)
 	}
 
-	var storageTimes []string
-	for t := range stats.StorageUsedChart {
-		storageTimes = append(storageTimes, t)
-	}
-	sort.Strings(storageTimes)
+	var totalFiles int
+	var totalSize int64
 
-	var fileTimes []string
-	for t := range stats.FileCountChart {
-		fileTimes = append(fileTimes, t)
-	}
-	sort.Strings(fileTimes)
-
-	var latestStorageUsed, latestFileCount int
-	if len(storageTimes) > 0 {
-		latestStorageUsed = stats.StorageUsedChart[storageTimes[len(storageTimes)-1]]
-	}
-	if len(fileTimes) > 0 {
-		latestFileCount = stats.FileCountChart[fileTimes[len(fileTimes)-1]]
+	for _, obj := range objects {
+		if obj.IsDirectory {
+			continue
+		}
+		totalFiles++
+		totalSize += int64(obj.Length)
 	}
 
-	return LatestChartData{
-		StorageUsed: latestStorageUsed,
-		FileCount:   latestFileCount,
-	}, nil
+	return totalFiles, totalSize, nil
 }
