@@ -113,7 +113,7 @@ func main() {
 						return
 					}
 
-					link := "https://pngtogif.b-cdn.net" + folder + "/" + fileName
+					link := "https://p2gcdn.netstat.ovh" + folder + "/" + fileName
 
 					mu.Lock()
 					links = append(links, link)
@@ -191,7 +191,7 @@ func main() {
 						return
 					}
 
-					link := "https://pngtogif.b-cdn.net" + folder + "/" + fileName
+					link := "https://p2gcdn.netstat.ovh" + folder + "/" + fileName
 
 					mu.Lock()
 					links = append(links, link)
