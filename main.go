@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	"github.com/shirou/gopsutil/v3/load"
+	Reporter "github.com/valeriansaliou/go-vigil-reporter/vigil_reporter"
 )
 
 var startTime time.Time
@@ -30,6 +31,10 @@ var startTime time.Time
 func main() {
 	startTime = time.Now()
 	godotenv.Load()
+
+	builder := Reporter.New(os.Getenv("VIGIL_REPORTER_URL"), os.Getenv("VIGIL_REPORTER_TOKEN"))
+	reporter := builder.ProbeID("png2gif").NodeID("png2gif-bot").ReplicaID(fmt.Sprintf("%s-%s", os.Getenv("BUNNYNET_MC_REGION"), os.Getenv("BUNNYNET_MC_PODID"))).Interval(time.Duration(30 * time.Second)).Build()
+	reporter.Run()
 
 	go StartPrometheusHTTPHandler()
 
