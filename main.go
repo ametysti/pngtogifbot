@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"image"
 	"image/gif"
-	"log"
+	"io"
 	"log/slog"
 	"mehf/pngtogifbot/translations"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"runtime"
 	"strings"
@@ -32,18 +33,23 @@ func main() {
 	startTime = time.Now()
 	godotenv.Load()
 
+	if isRunningInDocker() {
+		builder := Reporter.New(os.Getenv("VIGIL_REPORTER_URL"), os.Getenv("VIGIL_REPORTER_TOKEN"))
+		reporter := builder.ProbeID("png2gif").NodeID("png2gif-bot").ReplicaID(fmt.Sprintf("%s-%s", os.Getenv("BUNNYNET_MC_REGION"), os.Getenv("BUNNYNET_MC_PODID"))).Interval(time.Duration(30 * time.Second)).Build()
+		reporter.Run()
+	}
+
 	go StartPrometheusHTTPHandler()
 
 	commands := []*discordgo.ApplicationCommand{
 		{
-			Name:              "Transform images to GIF",
-			NameLocalizations: translations.TransformImageToGif,
-			Type:              3,
-		},
-		{
 			Name:              "Archive existing GIF",
 			NameLocalizations: translations.ArchiveGif,
 			Type:              3,
+		},
+		{
+			Name: "Transform files to GIFs",
+			Type: 3,
 		},
 		{
 			Name:        "stats",
@@ -52,17 +58,20 @@ func main() {
 	}
 
 	commandHandlers := map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){
-		"Transform images to GIF": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		"Transform files to GIFs": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 			var attachments []*discordgo.MessageAttachment
 
 			message := i.Interaction.Message
 
 			for _, message := range i.ApplicationCommandData().Resolved.Messages {
 				attachments = append(attachments, checkAttachments(message.Attachments, "image/")...)
+				attachments = append(attachments, checkAttachments(message.Attachments, "video/")...)
 			}
 
 			if message != nil && len(message.Attachments) > 0 {
 				attachments = append(attachments, checkAttachments(message.Attachments, "image/")...)
+				attachments = append(attachments, checkAttachments(message.Attachments, "video/")...)
+
 			}
 
 			if len(attachments) == 0 {
@@ -70,16 +79,22 @@ func main() {
 					Type: discordgo.InteractionResponseChannelMessageWithSource,
 					Data: &discordgo.InteractionResponseData{
 						Flags:   discordgo.MessageFlagsEphemeral,
-						Content: "No valid image attachments provided. Note that it has to be an uploaded image, not a link",
+						Content: "No valid file (image or video) attachments provided.",
 					},
 				})
 				return
 			}
 
+			processingMsg := "Processing file..."
+
+			if len(attachments) > 1 {
+				processingMsg = "Processing files..."
+			}
+
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "Processing images...",
+					Content: processingMsg,
 				},
 			})
 
@@ -93,28 +108,43 @@ func main() {
 				go func(attachment *discordgo.MessageAttachment) {
 					defer wg.Done()
 
-					buf, err := downloadAndEncodeToGif(attachment)
+					var buf *bytes.Buffer
+					var err error
+
+					if strings.HasPrefix(attachment.ContentType, "image/") {
+						buf, err = downloadAndEncodeToGif(attachment)
+					}
+
+					if strings.HasPrefix(attachment.ContentType, "video/") {
+						buf, err = downloadVideoAndEncodeToGif(attachment)
+					}
+
 					if err != nil {
 						fmt.Println("error processing attachment:", err)
+
+						msg := "Failed to process videos"
+
+						s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+							Content: &msg,
+						})
+
 						return
 					}
 
 					name := uuid.New()
 					fileName := fmt.Sprintf("%s.gif", name)
 
-					folder := "/gifs"
-
 					if !isRunningInDocker() {
-						folder = "/dev/gifs"
+						fileName = fmt.Sprintf("%s_devenv.gif", name)
 					}
 
-					_, err = Upload(context.Background(), folder, fileName, "", buf)
+					_, err = Upload(context.Background(), "/gifs", fileName, "", buf)
 					if err != nil {
 						fmt.Println("Error uploading file:", err)
 						return
 					}
 
-					link := "https://p2gcdn.netstat.ovh" + folder + "/" + fileName
+					link := "https://p2gcdn.netstat.ovh" + "/gifs" + "/" + fileName
 
 					mu.Lock()
 					links = append(links, link)
@@ -180,19 +210,17 @@ func main() {
 					name := uuid.New()
 					fileName := fmt.Sprintf("%s.gif", name)
 
-					folder := "/gifs"
-
 					if !isRunningInDocker() {
-						folder = "/dev/gifs"
+						fileName = fmt.Sprintf("%s_devenv.gif", name)
 					}
 
-					_, err = Upload(context.Background(), folder, fileName, "", buf)
+					_, err = Upload(context.Background(), "/gifs", fileName, "", buf)
 					if err != nil {
 						fmt.Println("Error uploading file:", err)
 						return
 					}
 
-					link := "https://p2gcdn.netstat.ovh" + folder + "/" + fileName
+					link := "https://p2gcdn.netstat.ovh" + "/gifs" + "/" + fileName
 
 					mu.Lock()
 					links = append(links, link)
@@ -289,27 +317,31 @@ func main() {
 		}
 	})
 
+	slog.Info("[DISCORD] Creating websocket connection")
+
 	err = dg.Open()
 	if err != nil {
-		fmt.Println("error opening connection,", err)
+		slog.Error("[DISCORD] Failed to create websocket connection", "error", err)
 		return
+	} else {
+		slog.Info("[DISCORD] Created websocket connection successfully")
 	}
 
-	log.Println("Adding commands...")
+	slog.Info("[DISCORD] Adding commands...")
 	registeredCommands := make([]*discordgo.ApplicationCommand, len(commands))
 	for i, v := range commands {
 		cmd, err := dg.ApplicationCommandCreate(dg.State.User.ID, "", v)
 		if err != nil {
-			log.Panicf("Cannot create '%v' command: %v", v.Name, err)
+			slog.Error("[DISCORD] Cannot create command", "command", v.Name, "error", err)
 		}
 		registeredCommands[i] = cmd
 	}
 
-	slog.Info("Checking for obsolete commands to remove...")
+	slog.Info("[DISCORD] Checking for obsolete commands to remove...")
 
 	commandsOnDiscord, err := dg.ApplicationCommands(dg.State.User.ID, "")
 	if err != nil {
-		slog.Error("failed to get Application commands")
+		slog.Error("[DISCORD] failed to get Application commands")
 	}
 	localCommandNames := make(map[string]bool)
 	for _, cmd := range commands {
@@ -318,19 +350,15 @@ func main() {
 
 	for _, v := range commandsOnDiscord {
 		if _, exists := localCommandNames[v.Name]; !exists {
-			log.Printf("Deleting obsolete command: %s", v.Name)
+			slog.Info("[DISCORD] Deleting obsolete command.", "name", v.Name)
 			err := dg.ApplicationCommandDelete(dg.State.User.ID, "", v.ID)
 			if err != nil {
-				log.Printf("Failed to delete '%v': %v", v.Name, err)
+				slog.Error("[DISCORD] Failed to delete obsolete command.", "name", v.Name, "error", err)
 			}
 		}
 	}
 
-	builder := Reporter.New(os.Getenv("VIGIL_REPORTER_URL"), os.Getenv("VIGIL_REPORTER_TOKEN"))
-	reporter := builder.ProbeID("png2gif").NodeID("png2gif-bot").ReplicaID(fmt.Sprintf("%s-%s", os.Getenv("BUNNYNET_MC_REGION"), os.Getenv("BUNNYNET_MC_PODID"))).Interval(time.Duration(30 * time.Second)).Build()
-	reporter.Run()
-
-	fmt.Println("Bot is now running.  Press CTRL-C to exit.")
+	slog.Info("[DISCORD] Bot is now running.")
 
 	go func() {
 		ticker := time.NewTicker(15 * time.Second)
@@ -443,4 +471,83 @@ func downloadAndEncodeToGif(attachment *discordgo.MessageAttachment) (*bytes.Buf
 	}
 
 	return buf, nil
+}
+
+func downloadVideoAndEncodeToGif(attachment *discordgo.MessageAttachment) (*bytes.Buffer, error) {
+	resp, err := http.Get(attachment.URL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to download video: %w", err)
+	}
+	defer resp.Body.Close()
+
+	tmpIn, err := os.CreateTemp("", "input-*.mp4")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp input file: %w", err)
+	}
+	defer os.Remove(tmpIn.Name())
+
+	_, err = io.Copy(tmpIn, resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to write to temp input file: %w", err)
+	}
+
+	tmpIn.Close()
+
+	tmpOut, err := os.CreateTemp("", "output-*.gif")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp output file: %w", err)
+	}
+	defer os.Remove(tmpOut.Name())
+	tmpOut.Close()
+
+	tmpPalette, err := os.CreateTemp("", "palette-*.png")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp palette file: %w", err)
+	}
+	defer os.Remove(tmpPalette.Name())
+
+	ffmpegLocation := "bin/ffmpeg-win/ffmpeg.exe"
+
+	if isRunningInDocker() {
+		ffmpegLocation = "bin/ffmpeg-linux/ffmpeg"
+	}
+
+	cmd1 := exec.Command(ffmpegLocation,
+		"-t", "10",
+		"-i", tmpIn.Name(),
+		"-vf", "fps=12,scale=480:-1:flags=lanczos,palettegen",
+		"-y",
+		tmpPalette.Name(),
+	)
+
+	var stderr1 bytes.Buffer
+	cmd1.Stderr = &stderr1
+
+	if err := cmd1.Run(); err != nil {
+		return nil, fmt.Errorf("failed to generate palette: %v\n%s", err, stderr1.String())
+	}
+
+	cmd2 := exec.Command(ffmpegLocation,
+		"-t", "10",
+		"-i", tmpIn.Name(),
+		"-i", tmpPalette.Name(),
+		//"-lavfi", "fps=12,scale=480:-1:flags=lanczos [x]; [x][1:v] paletteuse=dither=sierra2_4a",
+		"-lavfi", "fps=8,scale=480:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=3",
+		"-y",
+		tmpOut.Name(),
+	)
+
+	var stderr2 bytes.Buffer
+	cmd2.Stderr = &stderr2
+
+	if err := cmd2.Run(); err != nil {
+		return nil, fmt.Errorf("ffmpeg error: %v\n%s", err, stderr2.String())
+	}
+
+	outBytes, err := os.ReadFile(tmpOut.Name())
+	if err != nil {
+		return nil, fmt.Errorf("failed to read output file: %w", err)
+	}
+
+	return bytes.NewBuffer(outBytes), nil
 }

@@ -1,7 +1,8 @@
 package main
 
 import (
-	"log"
+	"context"
+	"log/slog"
 	"net/http"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -43,15 +44,17 @@ func StartPrometheusHTTPHandler() {
 	}
 	defer s.Close()
 
+	s.Dial(context.Background(), "tcp", "100.64.1.0:8080")
+
 	ln, err := s.Listen("tcp", addr)
 	if err != nil {
-		log.Fatalf("failed to listen on Tailscale interface: %v", err)
+		slog.Error("[PROMETHEUS] Failed to listen on Tailscale interface", "error", err)
 	}
 	http.Handle("/metrics", promhttp.Handler())
 
-	log.Println("Prometheus metrics server is running on Tailscale network at :2112")
+	slog.Info("[PROMETHEUS] Prometheus metrics server is running on Tailscale network at :2112")
 	err = http.Serve(ln, nil)
 	if err != nil {
-		log.Fatalf("HTTP server failed: %v", err)
+		slog.Error("[PROMETHEUS] Failed to open Prometheus metrics server", "error", err)
 	}
 }
