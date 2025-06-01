@@ -32,10 +32,6 @@ func main() {
 	startTime = time.Now()
 	godotenv.Load()
 
-	builder := Reporter.New(os.Getenv("VIGIL_REPORTER_URL"), os.Getenv("VIGIL_REPORTER_TOKEN"))
-	reporter := builder.ProbeID("png2gif").NodeID("png2gif-bot").ReplicaID(fmt.Sprintf("%s-%s", os.Getenv("BUNNYNET_MC_REGION"), os.Getenv("BUNNYNET_MC_PODID"))).Interval(time.Duration(30 * time.Second)).Build()
-	reporter.Run()
-
 	go StartPrometheusHTTPHandler()
 
 	commands := []*discordgo.ApplicationCommand{
@@ -329,6 +325,10 @@ func main() {
 			}
 		}
 	}
+
+	builder := Reporter.New(os.Getenv("VIGIL_REPORTER_URL"), os.Getenv("VIGIL_REPORTER_TOKEN"))
+	reporter := builder.ProbeID("png2gif").NodeID("png2gif-bot").ReplicaID(fmt.Sprintf("%s-%s", os.Getenv("BUNNYNET_MC_REGION"), os.Getenv("BUNNYNET_MC_PODID"))).Interval(time.Duration(30 * time.Second)).Build()
+	reporter.Run()
 
 	fmt.Println("Bot is now running.  Press CTRL-C to exit.")
 
