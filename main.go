@@ -509,7 +509,7 @@ func downloadVideoAndEncodeToGif(attachment *discordgo.MessageAttachment) (*byte
 	ffmpegLocation := "bin/ffmpeg-win/ffmpeg.exe"
 
 	if isRunningInDocker() {
-		ffmpegLocation = "bin/ffmpeg-linux/ffmpeg"
+		ffmpegLocation = "ffmpeg"
 	}
 
 	cmd1 := exec.Command(ffmpegLocation,

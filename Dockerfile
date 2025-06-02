@@ -17,6 +17,9 @@ WORKDIR /app
 
 COPY --from=builder /goapp /app/goapp
 
+COPY bin/ffmpeg-linux/ffmpeg /usr/local/bin/ffmpeg
+RUN chmod +x /usr/local/bin/ffmpeg
+
 RUN mkdir -p /app/files
 
 EXPOSE 2112
