@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/gif"
 	"io"
+	"log"
 	"log/slog"
 	"mehf/pngtogifbot/translations"
 	"net/http"
@@ -19,6 +20,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bwmarrin/discordgo"
 	"github.com/gary23b/easygif"
 	"github.com/google/uuid"
@@ -29,6 +34,8 @@ import (
 
 var startTime time.Time
 
+var S3Client *s3.Client
+
 func main() {
 	startTime = time.Now()
 	godotenv.Load()
@@ -38,6 +45,34 @@ func main() {
 		reporter := builder.ProbeID("png2gif").NodeID("png2gif-bot").ReplicaID(fmt.Sprintf("%s-%s", os.Getenv("BUNNYNET_MC_REGION"), os.Getenv("BUNNYNET_MC_PODID"))).Interval(time.Duration(30 * time.Second)).Build()
 		reporter.Run()
 	}
+
+	accessKey := os.Getenv("S3_ACCESS_KEY_ID")
+	secretKey := os.Getenv("S3_SECRET_ACCESS_KEY")
+
+	const (
+		region   = "nl-ams"
+		endpoint = "https://s3.nl-ams.scw.cloud"
+		bucket   = "png2gif-files"
+	)
+
+	cfg, err := config.LoadDefaultConfig(context.TODO(),
+		config.WithRegion(region),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
+	)
+	if err != nil {
+		log.Fatalf("failed to load AWS config: %v", err)
+	}
+
+	S3Client = s3.New(s3.Options{
+		Credentials: cfg.Credentials,
+		Region:      region,
+		EndpointResolver: s3.EndpointResolverFunc(func(region string, options s3.EndpointResolverOptions) (aws.Endpoint, error) {
+			return aws.Endpoint{
+				URL:           endpoint,
+				SigningRegion: region,
+			}, nil
+		}),
+	})
 
 	go StartPrometheusHTTPHandler()
 
@@ -94,6 +129,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
+					Flags:   discordgo.MessageFlagsEphemeral,
 					Content: processingMsg,
 				},
 			})
@@ -101,6 +137,7 @@ func main() {
 			var links []string
 			var wg sync.WaitGroup
 			var mu sync.Mutex
+			failedCount := 0
 
 			for _, a := range attachments {
 				wg.Add(1)
@@ -121,13 +158,9 @@ func main() {
 
 					if err != nil {
 						fmt.Println("error processing attachment:", err)
-
-						msg := "Failed to process videos"
-
-						s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-							Content: &msg,
-						})
-
+						mu.Lock()
+						failedCount++
+						mu.Unlock()
 						return
 					}
 
@@ -141,6 +174,9 @@ func main() {
 					_, err = Upload(context.Background(), "/gifs", fileName, "", buf)
 					if err != nil {
 						fmt.Println("Error uploading file:", err)
+						mu.Lock()
+						failedCount++
+						mu.Unlock()
 						return
 					}
 
@@ -154,7 +190,16 @@ func main() {
 
 			wg.Wait()
 
+			failedCountMessage := " file failed to process."
+
+			if failedCount > 1 {
+				failedCountMessage = " files failed to process."
+			}
+
 			joined := strings.Join(links, "\n")
+			if failedCount > 0 {
+				joined += fmt.Sprintf("\n\n%d %s", failedCount, failedCountMessage)
+			}
 
 			s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
 				Content: &joined,
@@ -187,6 +232,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
+					Flags:   discordgo.MessageFlagsEphemeral,
 					Content: "Processing images...",
 				},
 			})
@@ -240,6 +286,7 @@ func main() {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
+					Flags:   discordgo.MessageFlagsEphemeral,
 					Content: "Fetching statistics data...",
 				},
 			})
@@ -297,8 +344,11 @@ func main() {
 				},
 			}
 
+			emptyContent := ""
+
 			s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-				Embeds: &[]*discordgo.MessageEmbed{&embed},
+				Content: &emptyContent,
+				Embeds:  &[]*discordgo.MessageEmbed{&embed},
 			})
 		},
 	}
@@ -312,10 +362,16 @@ func main() {
 	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentMessageContent
 
 	dg.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		slog.Info("Command ran", "userId", i.Member.User.ID, "command", i.ApplicationCommandData().Name)
+
 		if h, ok := commandHandlers[i.ApplicationCommandData().Name]; ok {
 			h(s, i)
 		}
 	})
+
+	dg.AddHandler(onConnect)
+	dg.AddHandler(onDisconnect)
+	dg.AddHandler(onReady)
 
 	slog.Info("[DISCORD] Creating websocket connection")
 
@@ -358,7 +414,7 @@ func main() {
 		}
 	}
 
-	slog.Info("[DISCORD] Bot is now running.")
+	slog.Info("[DISCORD] Bot is now running fully.")
 
 	go func() {
 		ticker := time.NewTicker(15 * time.Second)
@@ -550,4 +606,16 @@ func downloadVideoAndEncodeToGif(attachment *discordgo.MessageAttachment) (*byte
 	}
 
 	return bytes.NewBuffer(outBytes), nil
+}
+
+func onConnect(s *discordgo.Session, _ *discordgo.Connect) {
+	slog.Info("[DISCORD] Connected to Discord")
+}
+
+func onDisconnect(s *discordgo.Session, _ *discordgo.Disconnect) {
+	slog.Info("[DISCORD] Connection lost to Discord")
+}
+
+func onReady(s *discordgo.Session, r *discordgo.Ready) {
+	slog.Info("[DISCORD] Bot is ready.", "id", r.User.ID, "botName", fmt.Sprintf("%s#%s", r.User.Username, r.User.Discriminator))
 }
