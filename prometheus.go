@@ -52,6 +52,17 @@ var (
 		Name: "storage_total_size_bytes",
 		Help: "Total size in bytes of all files in storage zone",
 	})
+	discordConnectionEvents = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "discord_connection_events_total",
+			Help: "Number of Discord connection events by type (e.g., ready, disconnect, resume)",
+		},
+		[]string{"bot", "event"},
+	)
+	discordConnectionStatus = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "discord_connection_status",
+		Help: "Current Discord connection status (1 = connected, 0 = disconnected)",
+	})
 )
 
 func StartPrometheusHTTPHandler() {

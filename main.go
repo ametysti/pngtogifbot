@@ -37,30 +37,9 @@ var startTime time.Time
 
 var S3Client *s3.Client
 
-func updateStorageMetrics() {
-	totalFiles, totalSize, err := GetStorageZoneStats()
-	if err != nil {
-		log.Printf("Failed to get storage stats: %v", err)
-		return
-	}
-
-	totalFilesGauge.Set(float64(totalFiles))
-	totalSizeGauge.Set(float64(totalSize))
-}
-
 func main() {
 	startTime = time.Now()
 	godotenv.Load()
-
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			updateStorageMetrics()
-			<-ticker.C
-		}
-	}()
 
 	if isRunningInDocker() {
 		builder := Reporter.New(os.Getenv("VIGIL_REPORTER_URL"), os.Getenv("VIGIL_REPORTER_TOKEN"))
@@ -393,6 +372,7 @@ func main() {
 
 	dg.AddHandler(onConnect)
 	dg.AddHandler(onDisconnect)
+	dg.AddHandler(onResume)
 	dg.AddHandler(onReady)
 
 	slog.Info("[DISCORD] Creating websocket connection")
@@ -468,6 +448,16 @@ func updateMetrics(dg *discordgo.Session) {
 
 	latency := dg.HeartbeatLatency().Seconds()
 	discordLatency.WithLabelValues(botType).Set(latency)
+
+	totalFiles, totalSize, err := GetStorageZoneStats()
+	if err != nil {
+		log.Printf("Failed to get storage stats: %v", err)
+	}
+
+	if err == nil {
+		totalFilesGauge.Set(float64(totalFiles))
+		totalSizeGauge.Set(float64(totalSize))
+	}
 }
 
 func checkAttachments(attachments []*discordgo.MessageAttachment, contentTypePrefix string) (attachs []*discordgo.MessageAttachment) {
@@ -633,12 +623,24 @@ func downloadVideoAndEncodeToGif(attachment *discordgo.MessageAttachment) (*byte
 
 func onConnect(s *discordgo.Session, _ *discordgo.Connect) {
 	slog.Info("[DISCORD] Connected to Discord")
+	discordConnectionEvents.WithLabelValues("png2gif", "connect").Inc()
+	discordConnectionStatus.Set(1)
 }
 
-func onDisconnect(s *discordgo.Session, _ *discordgo.Disconnect) {
+func onDisconnect(s *discordgo.Session, ev *discordgo.Disconnect) {
 	slog.Info("[DISCORD] Connection lost to Discord")
+	discordConnectionEvents.WithLabelValues("png2gif", "disconnect").Inc()
+	discordConnectionStatus.Set(0)
+}
+
+func onResume(s *discordgo.Session, _ *discordgo.Resumed) {
+	slog.Info("[DISCORD] Reconnected to Discord")
+	discordConnectionEvents.WithLabelValues("png2gif", "resume").Inc()
+	discordConnectionStatus.Set(1)
 }
 
 func onReady(s *discordgo.Session, r *discordgo.Ready) {
+	discordConnectionEvents.WithLabelValues("png2gif", "ready").Inc()
+	discordConnectionStatus.Set(1)
 	slog.Info("[DISCORD] Bot is ready.", "id", r.User.ID, "botName", fmt.Sprintf("%s#%s", r.User.Username, r.User.Discriminator))
 }
