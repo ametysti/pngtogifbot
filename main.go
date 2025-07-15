@@ -293,7 +293,7 @@ func main() {
 			})
 
 			cdn, cdnErr := GetPullZoneStats()
-			totalFiles, totalSize, storageErr := GetStorageZoneStats()
+			stats, storageErr := GetStorageZoneStats()
 			uptime := time.Since(startTime)
 
 			days := int(uptime.Hours()) / 24
@@ -312,7 +312,7 @@ func main() {
 			cpuResponse := fmt.Sprintf("%.2f %.2f %.2f", avg.Load1, avg.Load5, avg.Load15)
 
 			cdnResponse := fmt.Sprintf("**Bandwidth:** %s\n**Requests:** %d requests", bytesToReadable(cdn.TotalBandwidthUsed), cdn.TotalRequestsServed)
-			storageResponse := fmt.Sprintf("**Storage used:** %s\n**Files stored:** %d files", bytesToReadable(totalSize), totalFiles)
+			storageResponse := fmt.Sprintf("**Storage used:** %s\n**Files stored:** %d files", bytesToReadable(stats.TotalSize), stats.TotalFiles)
 
 			if cdnErr != nil {
 				cdnResponse = "CDN Stats API Down"
@@ -449,14 +449,17 @@ func updateMetrics(dg *discordgo.Session) {
 	latency := dg.HeartbeatLatency().Seconds()
 	discordLatency.WithLabelValues(botType).Set(latency)
 
-	totalFiles, totalSize, err := GetStorageZoneStats()
+	stats, err := GetStorageZoneStats()
 	if err != nil {
 		log.Printf("Failed to get storage stats: %v", err)
 	}
 
-	if err == nil {
-		totalFilesGauge.Set(float64(totalFiles))
-		totalSizeGauge.Set(float64(totalSize))
+	if stats.TotalFiles > 0 {
+		totalFilesGauge.Set(float64(stats.TotalFiles))
+	}
+
+	if stats.TotalSize > 0 {
+		totalSizeGauge.Set(float64(stats.TotalSize))
 	}
 }
 

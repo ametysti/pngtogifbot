@@ -60,6 +60,11 @@ type BunnyStorageObject struct {
 	IsDirectory bool   `json:"IsDirectory"`
 }
 
+type StorageZoneStats struct {
+	TotalFiles int   `json:"total_files"`
+	TotalSize  int64 `json:"total_size"`
+}
+
 func Upload(ctx context.Context, filepath string, filename string, checksum string, body io.Reader, discordData *discordgo.Message) (*Response, error) {
 	StorageZoneName := os.Getenv("BUNNYNET_CDN_STORAGE_NAME")
 	AccessKey := os.Getenv("BUNNYNET_CDN_STORAGE_KEY")
@@ -180,11 +185,11 @@ func GetPullZoneStats() (PullZoneStats, error) {
 	return stats, nil
 }
 
-func GetStorageZoneStats() (int, int64, error) {
+func GetStorageZoneStats() (StorageZoneStats, error) {
 	url := "https://storage.bunnycdn.com/pngtogif/gifs/"
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return 0, 0, fmt.Errorf("creating request failed: %w", err)
+		return StorageZoneStats{}, fmt.Errorf("creating request failed: %w", err)
 	}
 	req.Header.Set("AccessKey", os.Getenv("BUNNYNET_CDN_STORAGE_KEY"))
 	req.Header.Set("Accept", "application/json")
@@ -192,30 +197,29 @@ func GetStorageZoneStats() (int, int64, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	res, err := client.Do(req)
 	if err != nil {
-		return 0, 0, fmt.Errorf("request failed: %w", err)
+		return StorageZoneStats{}, fmt.Errorf("request failed: %w", err)
 	}
 	defer res.Body.Close()
 
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		return 0, 0, fmt.Errorf("reading response body failed: %w", err)
+		return StorageZoneStats{}, fmt.Errorf("reading response body failed: %w", err)
 	}
 
 	var objects []BunnyStorageObject
 	if err := json.Unmarshal(body, &objects); err != nil {
-		return 0, 0, fmt.Errorf("unmarshaling response failed: %w", err)
+		return StorageZoneStats{}, fmt.Errorf("unmarshaling response failed: %w", err)
 	}
 
-	var totalFiles int
-	var totalSize int64
+	var stats StorageZoneStats
 
 	for _, obj := range objects {
 		if obj.IsDirectory {
 			continue
 		}
-		totalFiles++
-		totalSize += int64(obj.Length)
+		stats.TotalFiles++
+		stats.TotalSize += int64(obj.Length)
 	}
 
-	return totalFiles, totalSize, nil
+	return stats, nil
 }
