@@ -20,8 +20,6 @@ COPY --from=builder /goapp /app/goapp
 COPY bin/ffmpeg-linux/ffmpeg /usr/local/bin/ffmpeg
 RUN chmod +x /usr/local/bin/ffmpeg
 
-RUN apt-get install libwebp-dev -y
-
 RUN mkdir -p /app/files
 
 EXPOSE 2112
