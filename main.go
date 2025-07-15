@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"image"
+
 	"image/gif"
 	"io"
 	"log"
@@ -36,15 +37,38 @@ var startTime time.Time
 
 var S3Client *s3.Client
 
+func updateStorageMetrics() {
+	totalFiles, totalSize, err := GetStorageZoneStats()
+	if err != nil {
+		log.Printf("Failed to get storage stats: %v", err)
+		return
+	}
+
+	totalFilesGauge.Set(float64(totalFiles))
+	totalSizeGauge.Set(float64(totalSize))
+}
+
 func main() {
 	startTime = time.Now()
 	godotenv.Load()
+
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			updateStorageMetrics()
+			<-ticker.C
+		}
+	}()
 
 	if isRunningInDocker() {
 		builder := Reporter.New(os.Getenv("VIGIL_REPORTER_URL"), os.Getenv("VIGIL_REPORTER_TOKEN"))
 		reporter := builder.ProbeID("png2gif").NodeID("png2gif-bot").ReplicaID(fmt.Sprintf("%s-%s", os.Getenv("BUNNYNET_MC_REGION"), os.Getenv("BUNNYNET_MC_PODID"))).Interval(time.Duration(30 * time.Second)).Build()
 		reporter.Run()
 	}
+
+	go StartPrometheusHTTPHandler()
 
 	accessKey := os.Getenv("S3_ACCESS_KEY_ID")
 	secretKey := os.Getenv("S3_SECRET_ACCESS_KEY")
@@ -73,8 +97,6 @@ func main() {
 			}, nil
 		}),
 	})
-
-	go StartPrometheusHTTPHandler()
 
 	commands := []*discordgo.ApplicationCommand{
 		{
@@ -171,7 +193,7 @@ func main() {
 						fileName = fmt.Sprintf("%s_devenv.gif", name)
 					}
 
-					_, err = Upload(context.Background(), "/gifs", fileName, "", buf)
+					_, err = Upload(context.Background(), "/gifs", fileName, "", buf, message)
 					if err != nil {
 						fmt.Println("Error uploading file:", err)
 						mu.Lock()
@@ -260,7 +282,7 @@ func main() {
 						fileName = fmt.Sprintf("%s_devenv.gif", name)
 					}
 
-					_, err = Upload(context.Background(), "/gifs", fileName, "", buf)
+					_, err = Upload(context.Background(), "/gifs", fileName, "", buf, message)
 					if err != nil {
 						fmt.Println("Error uploading file:", err)
 						return
@@ -502,6 +524,7 @@ func downloadGif(attachment *discordgo.MessageAttachment) (*bytes.Buffer, error)
 
 func downloadAndEncodeToGif(attachment *discordgo.MessageAttachment) (*bytes.Buffer, error) {
 	resp, err := http.Get(attachment.URL)
+
 	if err != nil {
 		fmt.Println("Error downloading attachment:", err)
 		return nil, err

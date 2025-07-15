@@ -1,14 +1,12 @@
 package main
 
 import (
-	"context"
 	"log/slog"
 	"net/http"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"tailscale.com/tsnet"
 )
 
 var (
@@ -27,37 +25,46 @@ var (
 		},
 		[]string{"bot"},
 	)
+
+	uploadCounter = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "uploads_total",
+		Help: "The total number of successful uploads",
+	})
+
+	backupUploadFailures = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "backup_upload_failures_total",
+			Help: "Number of failed backup uploads by error type",
+		},
+		[]string{"reason"},
+	)
+
+	uploadFailures = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "upload_failures_total",
+		Help: "Number of regular upload failures by type",
+	}, []string{"reason"})
+
+	totalFilesGauge = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "storage_total_files",
+		Help: "Total number of files in storage zone",
+	})
+	totalSizeGauge = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "storage_total_size_bytes",
+		Help: "Total size in bytes of all files in storage zone",
+	})
 )
 
-// Starts the Tailscale instance that exposes Prometheus metrics to the network
 func StartPrometheusHTTPHandler() {
 	addr := "127.0.0.1:2112"
-	hostname := "png2gif web server dev"
 
 	if isRunningInDocker() {
 		addr = ":2112"
-		hostname = "png2gif web server"
 	}
 
-	s := &tsnet.Server{
-		Hostname:  hostname,
-		Ephemeral: true,
-	}
-	defer s.Close()
-
-	s.Dial(context.Background(), "tcp", "100.64.1.0:8080")
-
-	ln, err := s.Listen("tcp", addr)
-	if err != nil {
-		slog.Error("[PROMETHEUS] Failed to listen on Tailscale interface", "error", err)
-	}
 	http.Handle("/metrics", promhttp.Handler())
 
-	err = http.Serve(ln, nil)
-	if err != nil {
-		slog.Error("[PROMETHEUS] Failed to open Prometheus metrics server", "error", err)
-		return
+	slog.Info("[PROMETHEUS] Starting Prometheus metrics server", "addr", addr)
+	if err := http.ListenAndServe(addr, nil); err != nil {
+		slog.Error("[PROMETHEUS] Failed to start HTTP server", "error", err)
 	}
-
-	slog.Info("[PROMETHEUS] Prometheus metrics server is running on Tailscale network at :2112")
 }

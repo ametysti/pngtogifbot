@@ -26,8 +26,16 @@ func UploadToBackupSite(ctx context.Context, filepath string, filename string, b
 
 	if err != nil {
 		slog.Error("[S3] Failed to upload to backup site", "file", key, "error", err)
+		backupUploadFailures.WithLabelValues("s3_failure").Inc()
 		return
 	}
 
-	slog.Info("[S3] Uploaded file to backup site", "key", key, "etag", aws.ToString(result.ETag))
+	if result.ETag == nil {
+		backupUploadFailures.WithLabelValues("no_etag").Inc()
+		return
+	}
+
+	if result.ETag != nil {
+		slog.Info("[S3] Uploaded file to backup site", "key", key, "etag", aws.ToString(result.ETag))
+	}
 }

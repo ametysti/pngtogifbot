@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"net/http"
+
+	"github.com/bwmarrin/discordgo"
 )
 
 type Response struct {
@@ -58,7 +60,7 @@ type BunnyStorageObject struct {
 	IsDirectory bool   `json:"IsDirectory"`
 }
 
-func Upload(ctx context.Context, filepath string, filename string, checksum string, body io.Reader) (*Response, error) {
+func Upload(ctx context.Context, filepath string, filename string, checksum string, body io.Reader, discordData *discordgo.Message) (*Response, error) {
 	StorageZoneName := os.Getenv("BUNNYNET_CDN_STORAGE_NAME")
 	AccessKey := os.Getenv("BUNNYNET_CDN_STORAGE_KEY")
 	Region := os.Getenv("BUNNYNET_CDN_STORAGE_REGION")
@@ -72,6 +74,7 @@ func Upload(ctx context.Context, filepath string, filename string, checksum stri
 
 	data, err := io.ReadAll(body)
 	if err != nil {
+		uploadFailures.WithLabelValues("body_read_fail").Inc()
 		return nil, err
 	}
 
@@ -93,6 +96,7 @@ func Upload(ctx context.Context, filepath string, filename string, checksum stri
 	resp, err := client.Do(req)
 	if err != nil {
 		slog.Error("Failed updating avatar", "error", err)
+		uploadFailures.WithLabelValues("bcdn_upload_fail").Inc()
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -100,6 +104,8 @@ func Upload(ctx context.Context, filepath string, filename string, checksum stri
 	responseBody, _ := io.ReadAll(resp.Body)
 
 	go UploadToBackupSite(ctx, filepath, filename, bytes.NewReader(data))
+
+	uploadCounter.Inc()
 
 	return &Response{
 		Status: resp.StatusCode,
