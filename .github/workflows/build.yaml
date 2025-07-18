@@ -29,11 +29,3 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository }}:latest
             ghcr.io/${{ github.repository }}:${{ github.sha }}
-
-      - name: Update container image on Magic Containers
-        uses: BunnyWay/actions/container-update-image@main
-        with:
-         app_id: ${{ vars.BUNNYNET_APP_ID }}
-         api_key: ${{ secrets.BUNNYNET_API_KEY }}
-         container: ${{ vars.BUNNYNET_APP_NAME }}
-         image_tag: "${{ github.sha }}"

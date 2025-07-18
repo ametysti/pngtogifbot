@@ -454,11 +454,11 @@ func updateMetrics(dg *discordgo.Session) {
 		log.Printf("Failed to get storage stats: %v", err)
 	}
 
-	if stats.TotalFiles > 0 {
+	if stats.TotalFiles > 1 {
 		totalFilesGauge.Set(float64(stats.TotalFiles))
 	}
 
-	if stats.TotalSize > 0 {
+	if stats.TotalSize > 1 {
 		totalSizeGauge.Set(float64(stats.TotalSize))
 	}
 }
